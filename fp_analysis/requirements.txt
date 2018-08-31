@@ -1,0 +1,12 @@
+opencv-python-headless
+numpy
+scikit-image
+matplotlib
+
+tqdm
+
+# os.path
+# os
+# random
+# csv
+# pathlib
