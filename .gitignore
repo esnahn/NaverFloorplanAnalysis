@@ -1,3 +1,7 @@
+# original data files
+*.csv
+*.tfrecord
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
