@@ -6,8 +6,5 @@ matplotlib
 
 tqdm
 
-# os.path
-# os
-# random
-# csv
-# pathlib
+pandas
+h5py
