@@ -1,8 +1,11 @@
 FROM tensorflow/tensorflow:latest-gpu-py3-jupyter
 MAINTAINER Euisoon Ahn <euisoon.ahn@gmail.com>
 
+RUN add-apt-repository ppa:deadsnakes/ppa
 RUN apt-get update
-# RUN apt-get install -y
+RUN apt-get -y install python3.6
+RUN ln -s --force $(which python3.6) /usr/local/bin/python
+RUN ln -s --force $(which python3.6) /usr/local/bin/python3
 
 ENV LANG C.UTF-8
 ENV LANGUAGE C.UTF-8
