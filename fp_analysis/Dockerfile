@@ -15,4 +15,7 @@ COPY requirements.txt requirements.txt
 RUN python -m pip install --upgrade pip
 RUN python -m pip install -r requirements.txt
 
+RUN jupyter nbextension install https://github.com/drillan/jupyter-black/archive/master.zip
+RUN jupyter nbextension enable jupyter-black-master/jupyter-black
+
 VOLUME ["/data", "/fp_img", "/notebooks"]

@@ -10,3 +10,6 @@ tqdm
 
 pandas
 h5py
+
+black
+jupyter_nbextensions_configurator
