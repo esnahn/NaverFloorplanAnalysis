@@ -11,6 +11,10 @@ ENV LANG C.UTF-8
 ENV LANGUAGE C.UTF-8
 ENV LC_ALL C.UTF-8
 
+RUN mkdir -p /usr/share/fonts/opentype/noto/
+RUN curl https://raw.githubusercontent.com/googlefonts/noto-cjk/master/NotoSansKR-Regular.otf > /usr/share/fonts/opentype/noto/NotoSansKR-Regular.otf
+RUN curl https://raw.githubusercontent.com/googlefonts/noto-cjk/master/NotoSansKR-Bold.otf > /usr/share/fonts/opentype/noto/NotoSansKR-Bold.otf
+
 COPY requirements.txt requirements.txt
 RUN python -m pip install --upgrade pip
 RUN python -m pip install -r requirements.txt
