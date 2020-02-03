@@ -1,4 +1,4 @@
-FROM tensorflow/tensorflow:latest-gpu-py3-jupyter
+FROM tensorflow/tensorflow:1.15.2-gpu-jupyter
 MAINTAINER Euisoon Ahn <euisoon.ahn@gmail.com>
 
 RUN add-apt-repository ppa:deadsnakes/ppa
