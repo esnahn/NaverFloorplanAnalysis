@@ -14,4 +14,8 @@ echo "Waiting the server to run for 5 seconds..."
 sleep 5
 
 # docker logs fp 2>&1 | grep "token="
-docker exec fp jupyter notebook list | grep "token="
+# docker exec fp jupyter notebook list | grep "token="
+
+### set password on the first run
+docker exec -it fp jupyter notebook password
+docker exec -it fp jupyter notebook stop
