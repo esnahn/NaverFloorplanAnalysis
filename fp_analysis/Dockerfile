@@ -15,9 +15,10 @@ RUN curl https://raw.githubusercontent.com/googlefonts/noto-cjk/master/NotoSansK
 # RUN ln -s --force $(which python3.6) /usr/local/bin/python
 # RUN ln -s --force $(which python3.6) /usr/local/bin/python3
 
+COPY pip.conf /etc/pip.conf
 COPY requirements.txt requirements.txt
 RUN python3 -m pip install --upgrade pip
-RUN python3 -m pip install -v -v -v -r requirements.txt
+RUN python3 -m pip install -r requirements.txt
 
 RUN jupyter nbextension install https://github.com/drillan/jupyter-black/archive/master.zip
 RUN jupyter nbextension enable jupyter-black-master/jupyter-black
