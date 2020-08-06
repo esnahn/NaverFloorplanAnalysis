@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from skimage.morphology import medial_axis
 from skimage.transform import rescale
+from math import sqrt
 
 
 ### file IO
