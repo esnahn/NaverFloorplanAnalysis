@@ -525,6 +525,9 @@ def get_unit_mask(bgr=np.zeros((1, 1, 3), dtype="uint8")):
     # Getting color based masks         #
     #####################################
 
+    #     wall_mask
+    #     ent_mask
+
     ldk_mask = get_LDK_mask(blur)
     bed_mask = get_bedroom_mask(blur)
     bal_mask = get_balcony_mask(blur)
@@ -588,23 +591,27 @@ def get_unit_mask(bgr=np.zeros((1, 1, 3), dtype="uint8")):
 
     ### if a white/gray space is larger than the smallest bedroom, it's outside
 
-    # size of the smallest bedroom (for determine a core)
-    min_bed_size = cv2.countNonZero(bed_mask)
-    ret, markers = cv2.connectedComponents(
-        cv2.morphologyEx(bed_mask, cv2.MORPH_CLOSE, kernel_9c) & ~wall_mask
-    )
-    for i in range(1, ret):
-        marker = (markers == i).astype(np.uint8) * 255
-        if cv2.countNonZero(marker) < min_bed_size:
-            min_bed_size = cv2.countNonZero(marker)
+    #     # size of the smallest bedroom (for determine a core)
+    #     min_bed_size = cv2.countNonZero(bed_mask)
+    #     ret, markers = cv2.connectedComponents(
+    #         cv2.morphologyEx(bed_mask, cv2.MORPH_CLOSE, kernel_9c) & ~wall_mask
+    #     )
+    #     for i in range(1, ret):
+    #         marker = (markers == i).astype(np.uint8) * 255
+    #         if cv2.countNonZero(marker) < min_bed_size:
+    #             min_bed_size = cv2.countNonZero(marker)
+    #     if debug:
+    #         print(min_bed_size)
 
     zones = ~wall_mask & ~border
+    zones = cv2.morphologyEx(zones, cv2.MORPH_OPEN, kernel_5c)
     ret, markers = cv2.connectedComponents(zones, connectivity=4)
 
+    indoor_mask_area = cv2.countNonZero(indoor_mask)
     for i in range(1, ret):
         marker = (markers == i).astype(np.uint8) * 255
         if not (marker & indoor_mask).sum():
-            if cv2.countNonZero(marker) > min_bed_size:
+            if cv2.countNonZero(marker) > 0.10 * indoor_mask_area:
                 outdoor_mask |= marker
 
     ### add boundaries of color masks if a zone contains more than one color
@@ -620,6 +627,7 @@ def get_unit_mask(bgr=np.zeros((1, 1, 3), dtype="uint8")):
         edge_stacked[:, :, k] = cv2.Canny(color_stacked[:, :, k], 100, 200) & ~ent_mask
     edge_combined = np.bitwise_or.reduce(edge_stacked, 2)
 
+    #     ret, markers = cv2.connectedComponents(zones, connectivity=4)
     for i in range(1, ret):
         marker = (markers == i).astype(np.uint8) * 255
         indoor_areas = (np.expand_dims(marker > 0, axis=2) & color_stacked).sum(
@@ -633,6 +641,7 @@ def get_unit_mask(bgr=np.zeros((1, 1, 3), dtype="uint8")):
     #####################################
 
     wall_mask_3d = np.expand_dims(wall_mask, axis=2)
+    wall_mask_d_3d = np.expand_dims(wall_mask_d, axis=2)
 
     color_stacked = (
         np.dstack((outdoor_mask, ent_mask_d, ldk_mask, bed_mask, bal_mask, bath_mask))
@@ -641,6 +650,7 @@ def get_unit_mask(bgr=np.zeros((1, 1, 3), dtype="uint8")):
     zones_filled = np.zeros_like(color_stacked)
 
     zones = ~wall_mask & ~border
+    zones = cv2.morphologyEx(zones, cv2.MORPH_OPEN, kernel_5c)
 
     # remove area not touching indoor markers
     ret, markers = cv2.connectedComponents(~wall_mask)
@@ -652,13 +662,16 @@ def get_unit_mask(bgr=np.zeros((1, 1, 3), dtype="uint8")):
     # make zones outside if more than a half of it is outside of bounding box (sanity check)
 
     ret, markers = cv2.connectedComponents(zones, connectivity=4)
+    marker_stacked = np.dstack(
+        [(markers == i).astype(np.uint8) * 255 for i in range(ret)]
+    )
     indexes = list(range(1, ret))
 
     indoor_mask_area = cv2.countNonZero(indoor_mask)
     margin = 0.02 * indoor_mask_area
 
     for i in indexes:
-        marker = (markers == i).astype(np.uint8) * 255
+        marker = marker_stacked[:, :, i]
         if cv2.countNonZero(marker) % 2 > (
             cv2.countNonZero(marker & indoor_bbox)  # + margin
         ):
@@ -670,37 +683,53 @@ def get_unit_mask(bgr=np.zeros((1, 1, 3), dtype="uint8")):
             zones_filled[:, :, 0] |= marker
 
     # fill
-    count_last = cv2.countNonZero(zones)
+    count_last = len(indexes)
+    remove_indexes = []
     repeat = 0
-    while cv2.countNonZero(zones):
+    while indexes:
 
         for i in indexes:
-            marker = (markers == i).astype(np.uint8) * 255
+            marker = marker_stacked[:, :, i]
             indoor_areas = (np.expand_dims(marker > 0, axis=2) & color_stacked > 0).sum(
                 axis=(0, 1)
             )
             k = indoor_areas.argmax()
+
             if indoor_areas[k]:
-                indexes.remove(i)
-                zones &= ~marker
+                if k != 0 or indoor_areas[1]:
+                    remove_indexes.append(i)
+                    zones &= ~marker
 
-                color_stacked[:, :, k] |= marker
-                zones_filled[:, :, k] |= marker
+                    color_stacked[:, :, k] |= marker
+                    zones_filled[:, :, k] |= marker
 
-        if cv2.countNonZero(zones):
-            color_stacked = cv2.dilate(color_stacked, kernel_5c) & ~wall_mask_3d
+        indexes = [i for i in indexes if i not in remove_indexes]
 
-        if cv2.countNonZero(zones) >= count_last:
+        if len(indexes) == count_last:
+            color_stacked = cv2.dilate(color_stacked, kernel_15c)
+            color_stacked &= ~wall_mask_d_3d
             repeat += 1
         else:
-            count_last = cv2.countNonZero(zones)
+            count_last = len(indexes)
             repeat = 0
 
         if repeat == 10:
             break
 
     ### return wall instead of outdoor
-    unit_comb = np.concatenate((wall_mask_3d, zones_filled[:, :, 1:6]), axis=-1)
+    unit_comb = np.concatenate(
+        (
+            np.expand_dims(
+                wall_mask
+                & cv2.dilate(
+                    np.bitwise_or.reduce(zones_filled[:, :, 1:6], 2), kernel_15c
+                ),
+                axis=2,
+            ),
+            zones_filled[:, :, 1:6],
+        ),
+        axis=-1,
+    )
 
     ### return outdoor/entrance/LDK/bedroom/balcony/bathroom stacked mask
     return unit_comb
