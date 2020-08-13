@@ -905,6 +905,48 @@ def fp_uint8_from_mono(mono):
     return unit_comb
 
 
+### preprocess
+
+
+def pad_fp(fp, width=112, height=112):
+    """place the fp at the bottom center of padded image."""
+    h, w = np.subtract(fp.shape[:2], (height, width))
+    if h > 0:
+        fp = fp[h : h + height, :, :]
+    if w > 0:
+        fp = fp[:, w // 2 : w // 2 + width, :]
+
+    h, w = np.subtract((height, width), fp.shape[:2])
+    fp = np.pad(fp, ((max(h, 0), 0), (max(w // 2, 0), max(w - w // 2, 0)), (0, 0)))
+    return fp
+
+
+### visualization
+
+
+def visualize_fp(fps):
+    # adjusted for different luminance
+    channel_to_rgba = np.array(
+        [
+            [0.0, 0.0, 0.0, 0.0],  # wall to black L0
+            [0.0, 0.33, 0.0, 0.0],  # entrance to green L30
+            [1.0, 0.25, 0.0, 0.0],  # LDK to red L57
+            [0.83, 0.87, 0.0, 0.0],  # bedroom to yellow L85
+            [0.0, 0.26, 1.0, 0.0],  # balcony to blue L40
+            [0.0, 0.81, 0.76, 0.0],  # bathroom to cyan L75
+        ]
+    )
+
+    # make colors subtractive
+    channel_to_rgba[:, 0:3] -= 1
+
+    # put it on white
+    fps_rgba = np.clip(
+        np.array([1.0, 1.0, 1.0, 1.0]) + (np.array(fps) @ channel_to_rgba), 0, 1
+    )
+    return fps_rgba
+
+
 ### standalone run
 if __name__ == "__main__":
     print("test")
