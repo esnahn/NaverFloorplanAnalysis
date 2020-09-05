@@ -808,9 +808,8 @@ def align_fp(unit_comb):
             unit_comb = np.rot90(unit_comb, -1)
 
     ### put entrance to left
-    if (
-        ent_moments["m10"] / ent_moments["m00"]
-        > ind_moments["m10"] / ind_moments["m00"]
+    if ent_moments["m00"] and (
+        (ent_moments["m10"] / ent_moments["m00"]) > (unit_comb.shape[1] / 2)
     ):
         # print("flip")
         unit_comb = np.flip(unit_comb, axis=1)
@@ -908,7 +907,7 @@ def fp_uint8_from_mono(mono):
 ### preprocess
 
 
-def pad_fp(fp, width=112, height=112):
+def pad_fp(fp, width=112, height=112, constant_values=0):
     """place the fp at the bottom center of padded image."""
     h, w = np.subtract(fp.shape[:2], (height, width))
     if h > 0:
@@ -917,7 +916,11 @@ def pad_fp(fp, width=112, height=112):
         fp = fp[:, w // 2 : w // 2 + width, :]
 
     h, w = np.subtract((height, width), fp.shape[:2])
-    fp = np.pad(fp, ((max(h, 0), 0), (max(w // 2, 0), max(w - w // 2, 0)), (0, 0)))
+    fp = np.pad(
+        fp,
+        ((max(h, 0), 0), (max(w // 2, 0), max(w - w // 2, 0)), (0, 0)),
+        constant_values=constant_values,
+    )
     return fp
 
 
