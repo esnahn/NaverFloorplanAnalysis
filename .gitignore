@@ -2,6 +2,11 @@
 *.csv
 *.tfrecord
 
+# intermediate data files
+*.txt
+*.csv.gz
+*.hdf5
+
 # result files
 *.png
 *.pdf
