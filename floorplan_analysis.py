@@ -792,7 +792,7 @@ def align_fp(unit_comb):
             pass
 
     else:
-        ldk_moments = cv2.moments(~unit_comb[:, :, 3], True)
+        ldk_moments = cv2.moments(~unit_comb[:, :, 2], True)
 
         if ldk_moments["nu02"] >= ldk_moments["nu20"]:
             # print("down")
@@ -813,6 +813,26 @@ def align_fp(unit_comb):
     ):
         # print("flip")
         unit_comb = np.flip(unit_comb, axis=1)
+
+    ### put main bedroom to down
+
+    def get_mbr(bedroom_mask):
+        dist_transform = cv2.distanceTransform(bedroom_mask, cv2.DIST_L2, 5)
+
+        ret, markers = cv2.connectedComponents(bedroom_mask)
+        counts = np.bincount(markers[dist_transform == dist_transform.max()])
+        return markers == np.argmax(counts)
+
+    mbr = get_mbr(unit_comb[:, :, 3])
+    dist_mbr_bottom = np.flip(mbr).sum(axis=1).argmax()
+    dist_mbr_top = mbr.sum(axis=1).argmax()
+
+    dist_bath_bottom = np.flip(unit_comb[:, :, 5]).sum(axis=1).argmax()
+    dist_bath_top = unit_comb[:, :, 5].sum(axis=1).argmax()
+
+    if dist_mbr_bottom > dist_bath_bottom:
+        if dist_bath_bottom - dist_mbr_bottom < dist_bath_top - dist_mbr_top:
+            unit_comb = np.flip(unit_comb, axis=0)
 
     return unit_comb
 
