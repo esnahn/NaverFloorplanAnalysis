@@ -2,7 +2,7 @@ from pathlib import Path
 import csv
 import cv2
 import numpy as np
-from skimage.morphology import medial_axis
+from skimage.morphology import skeletonize, medial_axis
 from skimage.transform import rescale
 from math import sqrt
 
@@ -454,14 +454,6 @@ def get_unit_mask(bgr=np.zeros((1, 1, 3), dtype="uint8")):
     as a dictionary of opencv masks and also a single combined mask,
     including masks for walls, entrances, LDK, bedrooms, balconies, and bathrooms."""
 
-    AREA_UNIT = 128
-    AREA_WALL = 64
-    AREA_ENTRANCE = 32
-    AREA_LDK = 16
-    AREA_BEDROOM = 8
-    AREA_BALCONY = 4
-    AREA_BATHROOM = 2
-
     kernel_3 = np.ones((3, 3), np.uint8)
     kernel_5c = np.array(
         [
@@ -716,6 +708,10 @@ def get_unit_mask(bgr=np.zeros((1, 1, 3), dtype="uint8")):
         if repeat == 10:
             break
 
+    # rollback entrance if it looks too big (sanity check)
+    if cv2.countNonZero(zones_filled[..., 1]) > 1.5 * cv2.countNonZero(ent_mask):
+        zones_filled[..., 1] = ent_mask
+
     ### return wall instead of outdoor
     unit_comb = np.concatenate(
         (
@@ -738,112 +734,259 @@ def get_unit_mask(bgr=np.zeros((1, 1, 3), dtype="uint8")):
 ### align and rescale
 
 
-def align_fp(unit_comb):
+def align_fp(fp):  # rescale first
     """put the main side to down and entrance to left"""
 
-    def align_calc(unit_comb):
-        def align_calc_x(unit_comb, cx):
-            moment_half = cv2.moments(
-                np.bitwise_or.reduce(unit_comb[:, cx:, :], 2), True
-            )
-            moment_bal = cv2.moments(unit_comb[:, cx:, 4], True)
-            return moment_bal["m20"] / moment_half["m20"] * moment_half["m00"]
-
-        def align_calc_y(unit_comb, cy):
-            moment_half = cv2.moments(
-                np.bitwise_or.reduce(unit_comb[cy:, :, :], 2), True
-            )
-            moment_bal = cv2.moments(unit_comb[cy:, :, 4], True)
-            return moment_bal["m02"] / moment_half["m02"] * moment_half["m00"]
-
-        x, y, w, h = cv2.boundingRect(np.bitwise_or.reduce(unit_comb, 2))
-        cx, cy = x + w // 2, y + h // 2
-
-        right, bottom = align_calc_x(unit_comb, cx), align_calc_y(unit_comb, cy)
-
-        x, y, w, h = cv2.boundingRect(
-            np.bitwise_or.reduce(cv2.rotate(unit_comb, cv2.ROTATE_180), 2)
-        )
-        cx, cy = x + w // 2, y + h // 2
-
-        left, top = (
-            align_calc_x(cv2.rotate(unit_comb, cv2.ROTATE_180), cx),
-            align_calc_y(cv2.rotate(unit_comb, cv2.ROTATE_180), cy),
+    def mbr_position(fp):
+        # center of floorplan
+        moments = cv2.moments(np.bitwise_or.reduce(fp[..., 1:], 2), True)
+        center = (
+            round(moments["m10"] / moments["m00"]),  # x
+            round(moments["m01"] / moments["m00"]),  # y
         )
 
-        return top, bottom, left, right
+        # core of main bedroom
+        dist_transform = cv2.distanceTransform(fp[:, :, 3], cv2.DIST_L2, 5)
+        mbr_core = (dist_transform == dist_transform.max()).astype(np.uint8)
 
-    ind_moments = cv2.moments(np.bitwise_or.reduce(unit_comb, 2), True)
-    ent_moments = cv2.moments(unit_comb[:, :, 1], True)
+        # horizontal
+        mbr_left = mbr_core[:, : center[0]].sum()
+        mbr_right = mbr_core[:, center[0] :].sum()
 
-    if cv2.countNonZero(unit_comb[:, :, 4]):
-        result = np.array(align_calc(unit_comb))
-        # print(result)
-        side = np.argmax(result)
-
-        if side == 2:
-            # print("left")
-            unit_comb = np.rot90(unit_comb, 1)
-        elif side == 3:
-            # print("right")
-            unit_comb = np.rot90(unit_comb, -1)
+        if mbr_left > mbr_right:
+            horizontal = "left"
+        elif mbr_left < mbr_right:
+            horizontal = "right"
         else:
-            # print("bottom?")
-            pass
+            horizontal = "not sure"
 
+        # vertical
+        mbr_top = mbr_core[: center[1], :].sum()
+        mbr_bottom = mbr_core[center[1] :, :].sum()
+
+        if mbr_top > mbr_bottom:
+            vertical = "top"
+        elif mbr_top < mbr_bottom:
+            vertical = "bottom"
+        else:
+            vertical = "not sure"
+
+        return horizontal, vertical
+
+    def ent_position(fp):
+        # center of floorplan
+        moments = cv2.moments(np.bitwise_or.reduce(fp[..., 1:], 2), True)
+        center = (
+            round(moments["m10"] / moments["m00"]),  # x
+            round(moments["m01"] / moments["m00"]),  # y
+        )
+
+        # core of entrance
+        dist_transform = cv2.distanceTransform(fp[:, :, 1], cv2.DIST_L2, 5)
+        core = (dist_transform == dist_transform.max()).astype(np.uint8)
+
+        # horizontal
+        left = core[:, : center[0]].sum()
+        right = core[:, center[0] :].sum()
+
+        if left > right:
+            horizontal = "left"
+        elif left < right:
+            horizontal = "right"
+        else:
+            horizontal = "not sure"
+
+        # vertical
+        top = core[: center[1], :].sum()
+        bottom = core[center[1] :, :].sum()
+
+        if top > bottom:
+            vertical = "top"
+        elif top < bottom:
+            vertical = "bottom"
+        else:
+            vertical = "not sure"
+
+        return horizontal, vertical
+
+    def balcony_per_facing(fp):
+        """balcony width by facing
+        returns list of total widths of balconies
+        facing left, right, top, bottom"""
+
+        # get connected balcony zones
+
+        ret, markers = cv2.connectedComponents(fp[:, :, 4])
+
+        # get adjacent areas per balcony
+
+        d = 11
+        kernel = np.zeros((d, d, 4), np.uint8)
+        kernel[d // 2, : d // 2 + 1, 0] = 1  # right, means facing left
+        kernel[d // 2, d // 2 :, 1] = 1  # left, means facing right
+        kernel[: d // 2 + 1, d // 2, 2] = 1  # bottom, means facing top
+        kernel[d // 2 :, d // 2, 3] = 1  # top, means facing bottom
+
+        dilated = np.zeros(markers.shape + (4,), np.uint8)
+        for i in range(4):
+            dilated[..., i] = cv2.dilate(markers.astype(np.uint8), kernel[..., i])
+        adjacent = dilated & np.expand_dims(np.bitwise_or.reduce(fp[..., 2:4], 2), 2)
+
+        # get sum by facing
+
+        sum_by_facing = [0, 0, 0, 0]
+        for i in range(1, ret):
+            moments = cv2.moments((markers == i).astype(int), True)
+            aspect = moments["nu20"] / moments["nu02"]
+            if aspect > 2:
+                # horizontal = top or bottom
+                width = np.bitwise_or.reduce((markers == i), 0).sum()
+
+                if (adjacent[..., 2] == i).sum() > (adjacent[..., 3] == i).sum():
+                    # facing top
+                    sum_by_facing[2] += width
+                else:
+                    # facing bottom
+                    sum_by_facing[3] += width
+            elif aspect < 0.5:
+                # vertical = left or right
+                width = np.bitwise_or.reduce((markers == i), 1).sum()
+
+                if (adjacent[..., 0] == i).sum() > (adjacent[..., 1] == i).sum():
+                    # facing left
+                    sum_by_facing[0] += width
+                else:
+                    # facing right
+                    sum_by_facing[1] += width
+            else:
+                # ignore
+                pass
+
+        return sum_by_facing  # lrtb
+
+    def facing_by_balcony(sum_by_facing, mbr_position):
+        assert any(sum_by_facing), "no balcony"
+
+        # remove minor facing
+
+        sum_by_facing = [
+            0 if width < max(sum_by_facing) / 2 else width for width in sum_by_facing
+        ]
+
+        # remove opposite
+
+        horizontal, vertical = mbr_position
+
+        if sum_by_facing[0] and sum_by_facing[1]:  # if left and right are both valid
+            if horizontal == "left":
+                sum_by_facing[1] = 0
+            elif horizontal == "right":
+                sum_by_facing[0] = 0
+            else:
+                if sum_by_facing[0] > sum_by_facing[1]:
+                    sum_by_facing[1] = 0
+                else:
+                    sum_by_facing[0] = 0
+
+        if sum_by_facing[2] and sum_by_facing[3]:  # if top and bottom are both valid
+            if vertical == "top":
+                sum_by_facing[3] = 0
+            elif vertical == "bottom":
+                sum_by_facing[2] = 0
+            else:
+                if sum_by_facing[2] > sum_by_facing[3]:
+                    sum_by_facing[3] = 0
+                else:
+                    sum_by_facing[2] = 0
+
+        # return facing with most balcony
+        return sum_by_facing.index(max(sum_by_facing))  # lrtb
+
+    def facing_by_wall(fp):
+        d = 5
+        kernel = np.zeros((d, d, 2), np.uint8)
+        kernel[
+            d // 2, :, 0
+        ] = 1  # horizontal, for horizontal walls, means facing left or right
+        kernel[
+            :, d // 2, 1
+        ] = 1  # vertical, for vertical walls, means facing top or bottom
+
+        erosion = np.zeros(fp.shape[:2] + (2,), np.uint8)
+        for i in range(2):
+            erosion[..., i] = cv2.erode(fp[..., 0], kernel[..., i])
+
+        wall_h = skeletonize(erosion[..., 0] > 0).sum()
+        wall_v = skeletonize(erosion[..., 1] > 0).sum()
+
+        horizontal, vertical = ent_position(fp)
+        if wall_h > wall_v:
+            # left or right
+            if horizontal == "left":
+                # facing right
+                facing = 1
+            elif horizontal == "right":
+                # facing left
+                facing = 0
+            else:
+                facing = -1  # not sure
+        else:
+            # top or bottom
+            if vertical == "top":
+                # facing bottom
+                facing = 3
+            elif vertical == "bottom":
+                # facing top
+                facing = 2
+            else:
+                facing = -1  # not sure
+
+        return facing  # lrtb
+
+    ### process
+
+    bal_per_facing = balcony_per_facing(fp)
+    if any(bal_per_facing):
+        facing = facing_by_balcony(bal_per_facing, mbr_position(fp))
     else:
-        ldk_moments = cv2.moments(~unit_comb[:, :, 2], True)
+        facing = facing_by_wall(fp)
 
-        if ldk_moments["nu02"] >= ldk_moments["nu20"]:
-            # print("down")
-            pass
-        elif (
-            ldk_moments["m10"] / ldk_moments["m00"]
-            < ent_moments["m10"] / ent_moments["m00"]
-        ):
-            # print("left")
-            unit_comb = np.rot90(unit_comb, 1)
-        else:
-            # print("right")
-            unit_comb = np.rot90(unit_comb, -1)
+    # if facing > 0:
+    #     print(["left", "right", "top", "bottom"][facing])
+    # else:
+    #     # not sure, don't do anything
+    #     pass
 
-    ### put entrance to left
-    if ent_moments["m00"] and (
-        (ent_moments["m10"] / ent_moments["m00"]) > (unit_comb.shape[1] / 2)
-    ):
-        # print("flip")
-        unit_comb = np.flip(unit_comb, axis=1)
+    if facing == 0:
+        # facing left
+        fp = np.rot90(fp, 1)
+    elif facing == 1:
+        # facing right
+        fp = np.rot90(fp, -1)
+    elif facing == 2:
+        # facing top
+        fp = np.rot90(fp, 2)
+    elif facing == 3:
+        # facing bottom, don't do anything
+        pass
+    else:
+        # not sure, don't do anything
+        pass
 
-    ### put main bedroom to down
+    # put entrance to left
+    horizontal, _ = ent_position(fp)
+    if horizontal == "right":
+        fp = np.flip(fp, axis=1)
 
-    def get_mbr(bedroom_mask):
-        dist_transform = cv2.distanceTransform(bedroom_mask, cv2.DIST_L2, 5)
-
-        ret, markers = cv2.connectedComponents(bedroom_mask)
-        counts = np.bincount(markers[dist_transform == dist_transform.max()])
-        return markers == np.argmax(counts)
-
-    mbr = get_mbr(unit_comb[:, :, 3])
-    dist_mbr_bottom = np.flip(mbr).sum(axis=1).argmax()
-    dist_mbr_top = mbr.sum(axis=1).argmax()
-
-    dist_bath_bottom = np.flip(unit_comb[:, :, 5]).sum(axis=1).argmax()
-    dist_bath_top = unit_comb[:, :, 5].sum(axis=1).argmax()
-
-    if dist_mbr_bottom > dist_bath_bottom:
-        if dist_bath_bottom - dist_mbr_bottom < dist_bath_top - dist_mbr_top:
-            unit_comb = np.flip(unit_comb, axis=0)
-
-    return unit_comb
+    return fp
 
 
 def rescale_fp(unit_comb, area, target_ppm=5, trim=True):
     # indoor pixels excluding balcony
     pixels = cv2.countNonZero(np.bitwise_or.reduce(unit_comb, 2) & ~unit_comb[:, :, 4])
-    # print(area, pixels)
+    assert pixels > 0
 
     scale = sqrt(area * target_ppm ** 2 / pixels)
-    # print(scale)
 
     unit_scale = rescale(unit_comb, scale, mode="edge", multichannel=True)
 
